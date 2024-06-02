@@ -33,10 +33,16 @@ popd build
 goto :eof
 
 :Compile
+pushd extern\haikal
+..\..\build\extern\haikal\Debug\haikal.exe
+popd
 %CompileCommand%
 goto :eof
 
 :CompileRun
+pushd extern\haikal
+..\..\build\extern\haikal\Debug\haikal.exe
+popd
 %CompileCommand%
 build\Debug\%projectName%.exe
 goto :eof
