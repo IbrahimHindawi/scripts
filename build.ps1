@@ -23,6 +23,7 @@ function Build {
 }
 
 function Compile {
+    cmake --build build\extern\haikal
     Push-Location extern\haikal
     & "..\..\build\extern\haikal\Debug\haikal.exe"
     Pop-Location
@@ -52,7 +53,8 @@ Push-Location extern\haikal
 Start-Process "..\..\build\extern\haikal\Debug\haikal.exe"
 Pop-Location
 
-$CompileCommand = "msbuild build\$projectName.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false"
+# $CompileCommand = "msbuild build\$projectName.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false"
+$CompileCommand = "cmake --build build -t $projectName"
 
 # $args = $args | ForEach-Object { $_ -replace '^[/-]+' }
 

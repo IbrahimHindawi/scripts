@@ -9,7 +9,8 @@ rem Setup Script Variables
 for %%I in (.) do set projectName=%%~nxI
 rem echo %projectName%
 
-set CompileCommand=msbuild build\%projectName%.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false
+rem set CompileCommand=msbuild build\%projectName%.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false
+set CompileCommand=cmake --build build
 
 rem Program Begin
 echo Use -h to display available commands.
@@ -33,6 +34,7 @@ popd build
 goto :eof
 
 :Compile
+cmake --build build\extern\haikal
 pushd extern\haikal
 call ..\..\build\extern\haikal\Debug\haikal.exe
 popd
