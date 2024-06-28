@@ -35,16 +35,12 @@ goto :eof
 
 :Compile
 cmake --build build\extern\haikal
-pushd extern\haikal
-call ..\..\build\extern\haikal\Debug\haikal.exe
-popd
+call build\extern\haikal\Debug\haikal.exe
 %CompileCommand%
 goto :eof
 
 :CompileRun
-pushd extern\haikal
-call ..\..\build\extern\haikal\Debug\haikal.exe
-popd
+call build\extern\haikal\Debug\haikal.exe
 %CompileCommand%
 build\Debug\%projectName%.exe
 goto :eof
