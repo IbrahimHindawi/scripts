@@ -29,20 +29,19 @@ function Help {
 function Build {
     mkdir -p build
     pushd build
-    cmake .. "-DCMAKE_TOOLCHAIN_FILE=/path/to/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=$projectName"
-    powershell -Command ../scripts/clang-build.ps1 -export-jsondb
+    cmake ..  "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=$projectName"
     popd
     echo "Building haikal metaprogram generator..."
     cmake --build build/extern/haikal
 }
 
 function Compile {
-    build/extern/haikal/Debug/haikal
+    ./build/extern/haikal/haikal
     $compileCommand
 }
 
 function CompileRun {
-    build/extern/haikal/Debug/haikal
+    .build/extern/haikal/haikal
     $compileCommand
     build/Debug/$projectName
 }
@@ -53,7 +52,7 @@ function MetaGen {
 }
 
 function Run {
-    build/Debug/$projectName
+    ./build/$projectName
 }
 
 function CleanUp {
