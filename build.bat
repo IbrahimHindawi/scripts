@@ -1,19 +1,19 @@
 @echo off
 
-rem WARNING:
-rem Must be executed from project root directory using `scripts\bbuild.bat`
-rem
-rem TODO(Ibrahim): Implement Debug and Release to CompileCommand.
+:: WARNING:
+:: Must be executed from project root directory using `scripts\bbuild.bat`
+::
+:: TODO(Ibrahim): Implement Debug and Release to CompileCommand.
 
-rem Setup Script Variables
+:: Setup Script Variables
 for %%I in (.) do set projectName=%%~nxI
-rem echo %projectName%
+:: echo %projectName%
 
-rem set CompileCommand=msbuild build\%projectName%.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false
+:: set CompileCommand=msbuild build\%projectName%.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false
 set CompileCommand=cmake --build build
-rem set CompileCommand=cmake --build build --target %projectName%
+:: set CompileCommand=cmake --build build --target %projectName%
 
-rem Program Begin
+:: Program Begin
 echo Use -h to display available commands.
 echo:
 goto GETOPTS
@@ -27,25 +27,31 @@ echo -r to run exe.
 echo -x to clean up.
 goto :eof
 
+:: TODO(Ibrahim): Move to NMake for faster compilation
+:: cmake -G "NMake Makefiles" ..
 :Build
 mkdir build
 pushd build
-cmake .. "-DCMAKE_TOOLCHAIN_FILE=C:\devel\vcpkg\scripts\buildsystems\vcpkg.cmake" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
-powershell -Command ..\scripts\clang-build.ps1 -export-jsondb
+:: cmake .. "-DCMAKE_TOOLCHAIN_FILE=C:\devel\vcpkg\scripts\buildsystems\vcpkg.cmake" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
+:: powershell -Command ..\scripts\clang-build.ps1 -export-jsondb
+:: cmake .. -G "NMake Makefiles" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
+cmake .. -G"Ninja" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
 popd build
-echo Building haikal metaprogram generator...
-cmake --build build\extern\haikal
+:: Ninja builds everything
+:: echo Building haikal metaprogram generator...
+:: cmake --build build\extern\haikal
 goto :eof
 
 :Compile
-call build\extern\haikal\Debug\haikal.exe
+call build\extern\haikal\haikal.exe
 %CompileCommand%
 goto :eof
 
 :CompileRun
-call build\extern\haikal\Debug\haikal.exe
+call build\extern\haikal\haikal.exe
 %CompileCommand%
-build\Debug\%projectName%.exe
+build\%projectName%.exe
+:: build\%projectName%.exe
 goto :eof
 
 :MetaGen
@@ -55,6 +61,7 @@ goto :eof
 
 :Run
 build\Debug\%projectName%.exe
+:: build\%projectName%.exe
 goto :eof
 
 :CleanUp
