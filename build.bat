@@ -34,7 +34,7 @@ mkdir build
 pushd build
 :: cmake .. "-DCMAKE_TOOLCHAIN_FILE=C:\devel\vcpkg\scripts\buildsystems\vcpkg.cmake" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
 :: powershell -Command ..\scripts\clang-build.ps1 -export-jsondb
-:: cmake .. -G "NMake Makefiles" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
+:: cmake .. -G"Ninja" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%" -DCMAKE_C_COMPILER=clang-cl
 cmake .. -G"Ninja" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
 popd build
 :: Ninja builds everything
