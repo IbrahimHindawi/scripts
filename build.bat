@@ -19,10 +19,11 @@ echo:
 goto GETOPTS
 
 :Help
-echo -b to build solution. 
-echo -c to compile. 
+echo -b to build.
+echo -c to compile.
 echo -cr to compile and run.
-echo -m to compile haikal metaprogram generator.
+echo -mb to build haikal.
+echo -mc to compile haikal.
 echo -r to run exe.
 echo -x to clean up.
 goto :eof
@@ -43,25 +44,37 @@ popd build
 goto :eof
 
 :Compile
-call build\extern\haikal\haikal.exe
+call extern\haikal\build\haikal.exe
 %CompileCommand%
 goto :eof
 
 :CompileRun
-call build\extern\haikal\haikal.exe
+call extern\haikal\build\haikal.exe
 %CompileCommand%
 build\%projectName%.exe
 :: build\%projectName%.exe
 goto :eof
 
-:MetaGen
-echo Building haikal metaprogram generator...
-cmake --build build\extern\haikal
+:MetaBuild
+echo Building haikal.
+pushd extern\haikal
+echo %cd%
+call scripts\build.bat -x
+call scripts\build.bat -b
+popd
+goto :eof
+
+:MetaCompile
+echo Compile haikal.
+pushd extern\haikal
+echo %cd%
+call scripts\build.bat -c
+popd
 goto :eof
 
 :Run
-build\Debug\%projectName%.exe
-:: build\%projectName%.exe
+:: build\Debug\%projectName%.exe
+build\%projectName%.exe
 goto :eof
 
 :CleanUp
@@ -74,7 +87,8 @@ if /I "%1" == "-h" call :Help
 if /I "%1" == "-b" call :Build
 if /I "%1" == "-c" call :Compile
 if /I "%1" == "-cr" call :CompileRun
-if /I "%1" == "-m" call :MetaGen
+if /I "%1" == "-mb" call :MetaBuild
+if /I "%1" == "-mc" call :MetaCompile
 if /I "%1" == "-r" call :Run
 if /I "%1" == "-x" call :CleanUp
 shift
