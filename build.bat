@@ -2,24 +2,22 @@
 
 :: WARNING:
 :: Must be executed from project root directory using `scripts\bbuild.bat`
-::
-:: TODO(Ibrahim): Implement Debug and Release to CompileCommand.
 
 :: Setup Script Variables
-for %%I in (.) do set projectName=%%~nxI
-:: echo %projectName%
+for %%I in (.) do set projectname=%%~nxI
+:: echo %projectname%
 
-:: set CompileCommand=msbuild build\%projectName%.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false
-set CompileCommand=cmake --build build
-:: set CompileCommand=cmake --build build --target %projectName%
+set generator="Ninja"
+set compilecommand=cmake --build build
+set buildcommand=cmake -B=build -G=%generator%
 
-:: Program Begin
 echo Use -h to display available commands.
 echo:
 goto GETOPTS
 
 :Help
 echo -b to build.
+echo -br to build release.
 echo -c to compile.
 echo -cr to compile and run.
 echo -mb to build haikal.
@@ -28,31 +26,25 @@ echo -r to run exe.
 echo -x to clean up.
 goto :eof
 
-:: TODO(Ibrahim): Move to NMake for faster compilation
-:: cmake -G "NMake Makefiles" ..
 :Build
 mkdir build
-pushd build
-:: cmake .. "-DCMAKE_TOOLCHAIN_FILE=C:\devel\vcpkg\scripts\buildsystems\vcpkg.cmake" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
-:: powershell -Command ..\scripts\clang-build.ps1 -export-jsondb
-:: cmake .. -G"Ninja" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%" -DCMAKE_C_COMPILER=clang-cl
-cmake .. -G"Ninja" "-DCMAKE_BUILD_TYPE=Debug" "-DProjectNameParam:STRING=%projectName%"
-popd build
-:: Ninja builds everything
-:: echo Building haikal metaprogram generator...
-:: cmake --build build\extern\haikal
+%buildcommand% "-DCMAKE_BUILD_TYPE=Debug" -DDEBUGRENDER=1
+goto :eof
+
+:BuildRelease
+mkdir build
+%buildcommand% "-DCMAKE_BUILD_TYPE=Release"
 goto :eof
 
 :Compile
 call extern\haikal\build\haikal.exe
-%CompileCommand%
+%compilecommand%
 goto :eof
 
 :CompileRun
 call extern\haikal\build\haikal.exe
-%CompileCommand%
-build\%projectName%.exe
-:: build\%projectName%.exe
+%compilecommand%
+build\%projectname%.exe
 goto :eof
 
 :MetaBuild
@@ -73,8 +65,7 @@ popd
 goto :eof
 
 :Run
-:: build\Debug\%projectName%.exe
-build\%projectName%.exe
+build\%projectname%.exe
 goto :eof
 
 :CleanUp
@@ -85,6 +76,7 @@ goto :eof
 :GETOPTS
 if /I "%1" == "-h" call :Help
 if /I "%1" == "-b" call :Build
+if /I "%1" == "-br" call :BuildRelease
 if /I "%1" == "-c" call :Compile
 if /I "%1" == "-cr" call :CompileRun
 if /I "%1" == "-mb" call :MetaBuild
