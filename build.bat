@@ -10,6 +10,8 @@ for %%I in (.) do set projectname=%%~nxI
 set generator="Ninja"
 set compilecommand=cmake --build build
 set buildcommand=cmake -B=build -G=%generator%
+set debugger=devenv
+:: set debugger=raddbg
 
 echo Use -h to display available commands.
 echo:
@@ -18,10 +20,12 @@ goto GETOPTS
 :Help
 echo -b to build.
 echo -br to build release.
+echo -brd to build release with debug info.
+echo -mb to build haikal meta.
+echo -mc to compile haikal meta.
 echo -c to compile.
 echo -cr to compile and run.
-echo -mb to build haikal.
-echo -mc to compile haikal.
+echo -crd to compile and run with debugger.
 echo -r to run exe.
 echo -x to clean up.
 goto :eof
@@ -36,6 +40,11 @@ mkdir build
 %buildcommand% "-DCMAKE_BUILD_TYPE=Release"
 goto :eof
 
+:BuildReleaseDebug
+mkdir build
+%buildcommand% "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+goto :eof
+
 :Compile
 call extern\haikal\build\haikal.exe
 %compilecommand%
@@ -45,6 +54,12 @@ goto :eof
 call extern\haikal\build\haikal.exe
 %compilecommand%
 build\%projectname%.exe
+goto :eof
+
+:CompileRunDebugger
+call extern\haikal\build\haikal.exe
+%compilecommand%
+%debugger% build\%projectname%.exe
 goto :eof
 
 :MetaBuild
@@ -77,10 +92,12 @@ goto :eof
 if /I "%1" == "-h" call :Help
 if /I "%1" == "-b" call :Build
 if /I "%1" == "-br" call :BuildRelease
-if /I "%1" == "-c" call :Compile
-if /I "%1" == "-cr" call :CompileRun
+if /I "%1" == "-brd" call :BuildReleaseDebug
 if /I "%1" == "-mb" call :MetaBuild
 if /I "%1" == "-mc" call :MetaCompile
+if /I "%1" == "-c" call :Compile
+if /I "%1" == "-cr" call :CompileRun
+if /I "%1" == "-crd" call :CompileRunDebugger
 if /I "%1" == "-r" call :Run
 if /I "%1" == "-x" call :CleanUp
 shift
