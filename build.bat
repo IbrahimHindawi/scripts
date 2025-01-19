@@ -32,7 +32,8 @@ goto :eof
 
 :Build
 mkdir build
-%buildcommand% "-DCMAKE_BUILD_TYPE=Debug" -DDEBUGRENDER=1
+::-DDEBUGRENDER=1
+%buildcommand% "-DCMAKE_BUILD_TYPE=Debug"
 goto :eof
 
 :BuildRelease
