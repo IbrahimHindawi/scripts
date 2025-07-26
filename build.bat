@@ -10,7 +10,7 @@ for %%I in (.) do set projectname=%%~nxI
 set generator="Ninja"
 set compilecommand=cmake --build build
 set buildcommand=cmake -B=build -G=%generator%
-set debugger=devenv
+set debugger=devenv /debugexe 
 :: set debugger=raddbg
 
 echo Use -h to display available commands.
