@@ -73,7 +73,7 @@ goto :eof
 
 :InjectResources
 if not exist build mkdir build
-python pipeline\resources_inject.py
+python pipeline\resources_inject.py --max-tex-width 128 --max-tex-height 128 --max-gui-width 2048 --max-gui-height 2048
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 goto :eof
 
