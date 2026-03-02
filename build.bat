@@ -9,7 +9,7 @@ for %%I in (.) do set projectname=%%~nxI
 
 set generator="Ninja"
 set compilecommand=cmake --build build
-set buildcommand=cmake -B=build -G=%generator%
+set buildcommand=cmake -S . -B build -G %generator% -DCMAKE_C_COMPILER=clang-cl
 set debugger=devenv /debugexe 
 :: set debugger=raddbg
 
@@ -48,19 +48,33 @@ goto :eof
 
 :Compile
 call extern\haikal\build\haikal.exe
+call :InjectResources
+%buildcommand% "-DCMAKE_BUILD_TYPE=Debug"
 %compilecommand%
 goto :eof
 
 :CompileRun
 call extern\haikal\build\haikal.exe
+call :InjectResources
+%buildcommand% "-DCMAKE_BUILD_TYPE=Debug"
 %compilecommand%
-build\%projectname%.exe
+shift
+build\%projectname%.exe %*
 goto :eof
 
 :CompileRunDebugger
 call extern\haikal\build\haikal.exe
+call :InjectResources
+%buildcommand% "-DCMAKE_BUILD_TYPE=Debug"
 %compilecommand%
-%debugger% build\%projectname%.exe
+shift
+%debugger% build\%projectname%.exe %*
+goto :eof
+
+:InjectResources
+if not exist build mkdir build
+python pipeline\resources_inject.py
+if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 goto :eof
 
 :MetaBuild
@@ -81,7 +95,8 @@ popd
 goto :eof
 
 :Run
-build\%projectname%.exe
+shift
+build\%projectname%.exe %*
 goto :eof
 
 :CleanUp
@@ -97,9 +112,9 @@ if /I "%1" == "-brd" call :BuildReleaseDebug
 if /I "%1" == "-mb" call :MetaBuild
 if /I "%1" == "-mc" call :MetaCompile
 if /I "%1" == "-c" call :Compile
-if /I "%1" == "-cr" call :CompileRun
-if /I "%1" == "-crd" call :CompileRunDebugger
-if /I "%1" == "-r" call :Run
+if /I "%1" == "-cr" call :CompileRun %*
+if /I "%1" == "-crd" call :CompileRunDebugger %*
+if /I "%1" == "-r" call :Run %*
 if /I "%1" == "-x" call :CleanUp
 shift
 if not "%1" == "" call :Epilogue
