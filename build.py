@@ -13,6 +13,45 @@ from typing import Callable, Iterable
 Hook = Callable[["BuildContext"], None]
 
 
+ROOT_BUILD_TEMPLATE = """from __future__ import annotations
+
+from scripts.build import BuildContext, cmake_build, cmake_configure, main, run_cmd
+
+
+def build_haikal(ctx: BuildContext) -> None:
+    haikal_build_dir = ctx.root_dir / "extern" / "haikal" / "build"
+    haikal_build_dir.mkdir(parents=True, exist_ok=True)
+
+    cmake_configure(
+        source_dir=ctx.root_dir / "extern" / "haikal",
+        build_dir=haikal_build_dir,
+        generator=ctx.generator,
+        c_compiler=ctx.c_compiler,
+        build_type="Debug",
+    )
+    cmake_build(haikal_build_dir)
+    run_cmd([haikal_build_dir / "haikal.exe"], cwd=ctx.root_dir)
+
+
+if __name__ == "__main__":
+    main(
+        project_name="{project_name}",
+        hooks={{
+            "pre_build": build_haikal,
+        }},
+        extra_clean_paths=(
+            "extern/haikal/build",
+        ),
+    )
+"""
+
+
+HAIKAL_TOML_TEMPLATE = """[core]
+mainpath = "src/main.c"
+metapath = "extern/haikal/src/meta_arena/"
+"""
+
+
 @dataclass(frozen=True)
 class BuildConfig:
     name: str
@@ -171,6 +210,36 @@ def _normalize_extra_args(args: list[str]) -> tuple[str, ...]:
     return tuple(args)
 
 
+def _write_init_file(path: Path, content: str, *, force: bool) -> bool:
+    if path.exists() and not force:
+        print(f"skip existing {path}")
+        return False
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8", newline="\n")
+    print(f"write {path}")
+    return True
+
+
+def command_init(root_dir: Path, *, project_name: str | None = None, force: bool = False) -> None:
+    root = root_dir.resolve()
+    name = project_name or root.name
+
+    files = {
+        root / "build.py": ROOT_BUILD_TEMPLATE.format(project_name=name),
+        root / "haikal.toml": HAIKAL_TOML_TEMPLATE,
+    }
+
+    for path, content in files.items():
+        _write_init_file(path, content, force=force)
+
+    print()
+    print("next:")
+    print("  git submodule add https://github.com/IbrahimHindawi/haikal extern/haikal")
+    print("  git submodule update --init --recursive")
+    print("  python build.py build debug")
+
+
 def main(
     *,
     project_name: str,
@@ -228,5 +297,14 @@ def main(
 
 
 if __name__ == "__main__":
-    print("scripts/build.py is a shared library. Use the project root build.py.")
-    raise SystemExit(2)
+    init_parser = argparse.ArgumentParser(prog="scripts/build.py")
+    init_parser.add_argument("--init", action="store_true", help="create a default project build.py/haikal setup")
+    init_parser.add_argument("--project-name", help="project name to write into generated files")
+    init_parser.add_argument("--force", action="store_true", help="overwrite files that already exist")
+    init_args = init_parser.parse_args()
+
+    if init_args.init:
+        command_init(Path.cwd(), project_name=init_args.project_name, force=init_args.force)
+    else:
+        print("scripts/build.py is a shared library. Use the project root build.py, or run scripts/build.py --init.")
+        raise SystemExit(2)
