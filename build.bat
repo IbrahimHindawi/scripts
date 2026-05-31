@@ -71,7 +71,7 @@ call :InjectResources %builddir%\res
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 call :BuildHaikal
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
-call %haikalexe%
+call %haikalexe% --entry src\main.c --meta extern\haikal\src\meta_arena
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 cmake --build %builddir%
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%

@@ -44,18 +44,18 @@ BuildReleaseDebug() {
 }
 
 Compile() {
-    ./extern/haikal/build/haikal
+    ./extern/haikal/build/haikal --entry src/main.c --meta extern/haikal/src/meta_arena
     $compilecommand
 }
 
 CompileRun() {
-    ./extern/haikal/build/haikal
+    ./extern/haikal/build/haikal --entry src/main.c --meta extern/haikal/src/meta_arena
     $compilecommand
     ./build/$projectname
 }
 
 CompileRunDebugger() {
-    ./extern/haikal/build/haikal
+    ./extern/haikal/build/haikal --entry src/main.c --meta extern/haikal/src/meta_arena
     $compilecommand
     $debugger ./build/$projectname
 }

@@ -25,7 +25,7 @@ function Build {
 function Compile {
     cmake --build build\extern\haikal
     Push-Location extern\haikal
-    & "..\..\build\extern\haikal\Debug\haikal.exe"
+    & "..\..\build\extern\haikal\Debug\haikal.exe" --entry "..\..\src\main.c" --meta "..\..\extern\haikal\src\meta_arena"
     Pop-Location
     Invoke-Expression $CompileCommand
 }
@@ -50,7 +50,7 @@ function CleanUp {
 $projectName = (Get-Item .).Name
 Write-Output "projectName: $projectName"
 Push-Location extern\haikal
-Start-Process "..\..\build\extern\haikal\Debug\haikal.exe"
+Start-Process "..\..\build\extern\haikal\Debug\haikal.exe" -ArgumentList "--entry", "..\..\src\main.c", "--meta", "..\..\extern\haikal\src\meta_arena"
 Pop-Location
 
 # $CompileCommand = "msbuild build\$projectName.sln -nologo -m -v:m /property:Configuration=Debug /property:VcpkgEnabled=false"
