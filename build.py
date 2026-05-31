@@ -13,6 +13,12 @@ from typing import Callable, Iterable
 Hook = Callable[["BuildContext"], None]
 
 
+class BuildArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.print_help(sys.stderr)
+        self.exit(2, f"\nerror: {message}\n")
+
+
 ROOT_BUILD_TEMPLATE = """from __future__ import annotations
 
 from scripts.build import BuildContext, cmake_build, cmake_configure, main, run_cmd
@@ -63,6 +69,8 @@ class BuildConfig:
 class Project:
     name: str
     exe_name: str | None = None
+    test_target: str | None = None
+    test_exe_name: str | None = None
     root_dir: Path = field(default_factory=lambda: Path.cwd())
     generator: str = "Ninja"
     c_compiler: str = "clang-cl"
@@ -93,6 +101,18 @@ class BuildContext:
     @property
     def exe_path(self) -> Path:
         return self.build_dir / self.exe_name
+
+    @property
+    def test_exe_name(self) -> str:
+        if self.project.test_exe_name:
+            return self.project.test_exe_name
+        if self.project.test_target:
+            return f"{self.project.test_target}.exe"
+        raise RuntimeError("No test executable configured.")
+
+    @property
+    def test_exe_path(self) -> Path:
+        return self.build_dir / self.test_exe_name
 
     @property
     def generator(self) -> str:
@@ -142,8 +162,11 @@ def cmake_configure(
     )
 
 
-def cmake_build(build_dir: Path | str, *, cwd: Path | str | None = None) -> None:
-    run_cmd(["cmake", "--build", build_dir], cwd=cwd)
+def cmake_build(build_dir: Path | str, *, target: str | None = None, cwd: Path | str | None = None) -> None:
+    args: list[os.PathLike[str] | str] = ["cmake", "--build", build_dir]
+    if target:
+        args.extend(["--target", target])
+    run_cmd(args, cwd=cwd)
 
 
 def call_hook(ctx: BuildContext, name: str) -> None:
@@ -184,6 +207,19 @@ def command_debugexe(ctx: BuildContext) -> None:
     call_hook(ctx, "pre_debugexe")
     run_cmd([*ctx.project.debugger, ctx.exe_path, *ctx.extra_args])
     call_hook(ctx, "post_debugexe")
+
+
+def command_test(ctx: BuildContext) -> None:
+    if not ctx.project.test_target:
+        raise SystemExit("No test target configured.")
+
+    command_config(ctx)
+    call_hook(ctx, "pre_build")
+    cmake_build(ctx.build_dir, target=ctx.project.test_target)
+    call_hook(ctx, "post_build")
+    call_hook(ctx, "pre_test")
+    run_cmd([ctx.test_exe_path, *ctx.extra_args])
+    call_hook(ctx, "post_test")
 
 
 def _safe_rmtree(root: Path, target: Path) -> None:
@@ -244,6 +280,8 @@ def main(
     *,
     project_name: str,
     exe_name: str | None = None,
+    test_target: str | None = None,
+    test_exe_name: str | None = None,
     root_dir: Path | str | None = None,
     generator: str = "Ninja",
     c_compiler: str = "clang-cl",
@@ -256,6 +294,8 @@ def main(
     project = Project(
         name=project_name,
         exe_name=exe_name,
+        test_target=test_target,
+        test_exe_name=test_exe_name,
         root_dir=root,
         generator=generator,
         c_compiler=c_compiler,
@@ -265,15 +305,40 @@ def main(
         extra_clean_paths=tuple(Path(path) for path in extra_clean_paths),
     )
 
-    parser = argparse.ArgumentParser(prog="build.py")
+    command_help = {
+        "config": "configure the selected CMake build directory",
+        "build": "configure, run build hooks, and build the project",
+        "run": "build the project and run the executable",
+        "debugexe": "build the project and launch it under the configured debugger",
+        "test": "build and run the configured test target",
+        "clean": "remove configured build directories",
+    }
+    config_names = ", ".join(sorted(project.configs.keys()))
+
+    parser = BuildArgumentParser(
+        prog="build.py",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=f"Build helper for {project.name}.",
+        epilog=(
+            "commands:\n"
+            + "\n".join(f"  {name:<8} {description}" for name, description in command_help.items())
+            + "\n\n"
+            f"configs: {config_names}\n\n"
+            "examples:\n"
+            "  python build.py build debug\n"
+            "  python build.py run debug -- arg0 arg1\n"
+            "  python build.py test debug\n"
+            "  python build.py clean"
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for command_name in ("config", "build", "run", "debugexe"):
-        command_parser = subparsers.add_parser(command_name)
+    for command_name in ("config", "build", "run", "debugexe", "test"):
+        command_parser = subparsers.add_parser(command_name, help=command_help[command_name])
         command_parser.add_argument("config", choices=sorted(project.configs.keys()))
         command_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
 
-    subparsers.add_parser("clean")
+    subparsers.add_parser("clean", help=command_help["clean"])
 
     args = parser.parse_args()
 
@@ -290,6 +355,7 @@ def main(
             "build": command_build,
             "run": command_run,
             "debugexe": command_debugexe,
+            "test": command_test,
         }
         commands[args.command](ctx)
     except subprocess.CalledProcessError as exc:
