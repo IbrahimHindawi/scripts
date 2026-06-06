@@ -71,9 +71,15 @@ class BuildConfig:
 @dataclass(frozen=True)
 class Project:
     name: str
+    mode: str = "c"
     exe_name: str | None = None
     test_target: str | None = None
     test_exe_name: str | None = None
+    i_entry: Path | None = None
+    i_compiler: Path | None = None
+    i_compiler_build_command: tuple[os.PathLike[str] | str, ...] = ()
+    i_compiler_build_cwd: Path | None = None
+    i_gen_dir: Path = Path("i_gen")
     root_dir: Path = field(default_factory=lambda: Path.cwd())
     generator: str = "Ninja"
     c_compiler: str = "clang-cl"
@@ -125,6 +131,53 @@ class BuildContext:
     def c_compiler(self) -> str:
         return self.project.c_compiler
 
+    @property
+    def is_i_project(self) -> bool:
+        return self.project.mode == "i"
+
+    @property
+    def i_entry_path(self) -> Path:
+        if not self.project.i_entry:
+            raise RuntimeError("I project mode requires i_entry.")
+        if self.project.i_entry.is_absolute():
+            return self.project.i_entry
+        return self.root_dir / self.project.i_entry
+
+    @property
+    def i_compiler_path(self) -> Path:
+        compiler = self.project.i_compiler or Path("build") / "I.exe"
+        if compiler.is_absolute():
+            return compiler
+        return self.root_dir / compiler
+
+    @property
+    def i_generated_dir(self) -> Path:
+        if self.project.i_gen_dir.is_absolute():
+            return self.project.i_gen_dir
+        return self.build_dir / self.project.i_gen_dir
+
+    @property
+    def i_generated_c_path(self) -> Path:
+        return self.i_generated_dir / f"{self.i_entry_path.stem}.c"
+
+    @property
+    def i_generated_h_path(self) -> Path:
+        return self.i_generated_dir / f"{self.i_entry_path.stem}.h"
+
+    @property
+    def cmake_defines(self) -> dict[str, object]:
+        defines: dict[str, object] = {}
+        if self.is_i_project:
+            defines.update(
+                {
+                    "BUNYAN_I_ENTRY": self.i_entry_path,
+                    "BUNYAN_I_GEN_DIR": self.i_generated_dir,
+                    "BUNYAN_I_GENERATED_C": self.i_generated_c_path,
+                    "BUNYAN_I_GENERATED_H": self.i_generated_h_path,
+                }
+            )
+        return defines
+
 
 def default_configs() -> dict[str, BuildConfig]:
     return {
@@ -147,22 +200,26 @@ def cmake_configure(
     generator: str,
     c_compiler: str,
     build_type: str,
+    defines: dict[str, object] | None = None,
     cwd: Path | str | None = None,
 ) -> None:
-    run_cmd(
-        [
-            "cmake",
-            "-S",
-            source_dir,
-            "-B",
-            build_dir,
-            "-G",
-            generator,
-            f"-DCMAKE_C_COMPILER={c_compiler}",
-            f"-DCMAKE_BUILD_TYPE={build_type}",
-        ],
-        cwd=cwd,
-    )
+    args: list[os.PathLike[str] | str] = [
+        "cmake",
+        "-S",
+        source_dir,
+        "-B",
+        build_dir,
+        "-G",
+        generator,
+        f"-DCMAKE_C_COMPILER={c_compiler}",
+        f"-DCMAKE_BUILD_TYPE={build_type}",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+    ]
+    for key, value in (defines or {}).items():
+        if isinstance(value, bool):
+            value = "ON" if value else "OFF"
+        args.append(f"-D{key}={value}")
+    run_cmd(args, cwd=cwd)
 
 
 def cmake_build(build_dir: Path | str, *, target: str | None = None, cwd: Path | str | None = None) -> None:
@@ -178,15 +235,45 @@ def call_hook(ctx: BuildContext, name: str) -> None:
         hook(ctx)
 
 
+def command_i_translate(ctx: BuildContext) -> None:
+    if not ctx.is_i_project:
+        return
+
+    compiler = ctx.i_compiler_path
+    if not compiler.exists() and ctx.project.i_compiler_build_command:
+        run_cmd(
+            ctx.project.i_compiler_build_command,
+            cwd=ctx.project.i_compiler_build_cwd or ctx.root_dir,
+        )
+    if not compiler.exists():
+        raise SystemExit(f"I compiler not found: {compiler}")
+
+    ctx.i_generated_dir.mkdir(parents=True, exist_ok=True)
+    run_cmd(
+        [
+            compiler,
+            "compile",
+            ctx.i_entry_path,
+            "-o",
+            ctx.i_generated_c_path,
+            "--header",
+            ctx.i_generated_h_path,
+        ],
+        cwd=ctx.root_dir,
+    )
+
+
 def command_config(ctx: BuildContext) -> None:
     call_hook(ctx, "pre_config")
     ctx.build_dir.mkdir(parents=True, exist_ok=True)
+    command_i_translate(ctx)
     cmake_configure(
         source_dir=ctx.root_dir,
         build_dir=ctx.build_dir,
         generator=ctx.generator,
         c_compiler=ctx.c_compiler,
         build_type=ctx.config.cmake_build_type,
+        defines=ctx.cmake_defines,
     )
     call_hook(ctx, "post_config")
 
@@ -281,9 +368,15 @@ def command_init(root_dir: Path, *, project_name: str | None = None, force: bool
 def main(
     *,
     project_name: str,
+    mode: str = "c",
     exe_name: str | None = None,
     test_target: str | None = None,
     test_exe_name: str | None = None,
+    i_entry: Path | str | None = None,
+    i_compiler: Path | str | None = None,
+    i_compiler_build_command: Iterable[os.PathLike[str] | str] = (),
+    i_compiler_build_cwd: Path | str | None = None,
+    i_gen_dir: Path | str = "i_gen",
     root_dir: Path | str | None = None,
     generator: str = "Ninja",
     c_compiler: str = "clang-cl",
@@ -293,11 +386,22 @@ def main(
     extra_clean_paths: Iterable[Path | str] = (),
 ) -> None:
     root = Path(root_dir) if root_dir else Path.cwd()
+    if mode not in ("c", "i"):
+        raise SystemExit(f"unknown project mode: {mode}")
+    if mode == "i" and not i_entry:
+        raise SystemExit("mode='i' requires i_entry.")
+
     project = Project(
         name=project_name,
+        mode=mode,
         exe_name=exe_name,
         test_target=test_target,
         test_exe_name=test_exe_name,
+        i_entry=Path(i_entry) if i_entry else None,
+        i_compiler=Path(i_compiler) if i_compiler else None,
+        i_compiler_build_command=tuple(i_compiler_build_command),
+        i_compiler_build_cwd=Path(i_compiler_build_cwd) if i_compiler_build_cwd else None,
+        i_gen_dir=Path(i_gen_dir),
         root_dir=root,
         generator=generator,
         c_compiler=c_compiler,
