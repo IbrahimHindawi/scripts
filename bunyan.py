@@ -80,6 +80,7 @@ class Project:
     i_compiler_build_command: tuple[os.PathLike[str] | str, ...] = ()
     i_compiler_build_cwd: Path | None = None
     i_gen_dir: Path = Path("i_gen")
+    i_import_dirs: tuple[Path, ...] = ()
     root_dir: Path = field(default_factory=lambda: Path.cwd())
     generator: str = "Ninja"
     c_compiler: str = "clang-cl"
@@ -145,10 +146,30 @@ class BuildContext:
 
     @property
     def i_compiler_path(self) -> Path:
-        compiler = self.project.i_compiler or Path("build") / "I.exe"
+        compiler = self.project.i_compiler or Path("I.exe")
         if compiler.is_absolute():
             return compiler
+        if compiler.parent == Path("."):
+            return compiler
         return self.root_dir / compiler
+
+    @property
+    def i_compiler_resolved_path(self) -> Path | None:
+        compiler = self.i_compiler_path
+        if compiler.is_absolute() or compiler.parent != Path("."):
+            return compiler if compiler.exists() else None
+        found = shutil.which(str(compiler))
+        return Path(found) if found else None
+
+    @property
+    def i_compiler_dir(self) -> Path | None:
+        resolved = self.i_compiler_resolved_path
+        return resolved.parent if resolved else None
+
+    @property
+    def i_std_dir(self) -> Path | None:
+        compiler_dir = self.i_compiler_dir
+        return compiler_dir / "std" if compiler_dir else None
 
     @property
     def i_generated_dir(self) -> Path:
@@ -165,6 +186,13 @@ class BuildContext:
         return self.i_generated_dir / f"{self.i_entry_path.stem}.h"
 
     @property
+    def i_import_dir_paths(self) -> tuple[Path, ...]:
+        paths: list[Path] = []
+        for path in self.project.i_import_dirs:
+            paths.append(path if path.is_absolute() else self.root_dir / path)
+        return tuple(paths)
+
+    @property
     def cmake_defines(self) -> dict[str, object]:
         defines: dict[str, object] = {}
         if self.is_i_project:
@@ -176,6 +204,12 @@ class BuildContext:
                     "BUNYAN_I_GENERATED_H": self.i_generated_h_path,
                 }
             )
+            compiler_dir = self.i_compiler_dir
+            std_dir = self.i_std_dir
+            if compiler_dir:
+                defines["BUNYAN_I_COMPILER_DIR"] = compiler_dir
+            if std_dir:
+                defines["BUNYAN_I_STD_DIR"] = std_dir
         return defines
 
 
@@ -240,27 +274,30 @@ def command_i_translate(ctx: BuildContext) -> None:
         return
 
     compiler = ctx.i_compiler_path
-    if not compiler.exists() and ctx.project.i_compiler_build_command:
+    compiler_is_file = compiler.is_absolute() or compiler.parent != Path(".")
+    if compiler_is_file and not compiler.exists() and ctx.project.i_compiler_build_command:
         run_cmd(
             ctx.project.i_compiler_build_command,
             cwd=ctx.project.i_compiler_build_cwd or ctx.root_dir,
         )
-    if not compiler.exists():
+    if compiler_is_file and not compiler.exists():
         raise SystemExit(f"I compiler not found: {compiler}")
+    if not compiler_is_file and not shutil.which(str(compiler)):
+        raise SystemExit(f"I compiler not found on PATH: {compiler}")
 
     ctx.i_generated_dir.mkdir(parents=True, exist_ok=True)
-    run_cmd(
-        [
-            compiler,
-            "compile",
-            ctx.i_entry_path,
-            "-o",
-            ctx.i_generated_c_path,
-            "--header",
-            ctx.i_generated_h_path,
-        ],
-        cwd=ctx.root_dir,
-    )
+    args: list[os.PathLike[str] | str] = [
+        compiler,
+        "compile",
+        ctx.i_entry_path,
+        "-o",
+        ctx.i_generated_c_path,
+        "--header",
+        ctx.i_generated_h_path,
+    ]
+    for path in ctx.i_import_dir_paths:
+        args.extend(["--importdir", path])
+    run_cmd(args, cwd=ctx.root_dir)
 
 
 def command_config(ctx: BuildContext) -> None:
@@ -377,6 +414,7 @@ def main(
     i_compiler_build_command: Iterable[os.PathLike[str] | str] = (),
     i_compiler_build_cwd: Path | str | None = None,
     i_gen_dir: Path | str = "i_gen",
+    i_import_dirs: Iterable[Path | str] = (),
     root_dir: Path | str | None = None,
     generator: str = "Ninja",
     c_compiler: str = "clang-cl",
@@ -402,6 +440,7 @@ def main(
         i_compiler_build_command=tuple(i_compiler_build_command),
         i_compiler_build_cwd=Path(i_compiler_build_cwd) if i_compiler_build_cwd else None,
         i_gen_dir=Path(i_gen_dir),
+        i_import_dirs=tuple(Path(path) for path in i_import_dirs),
         root_dir=root,
         generator=generator,
         c_compiler=c_compiler,
