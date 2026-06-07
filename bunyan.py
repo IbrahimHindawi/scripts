@@ -15,6 +15,27 @@ Hook = Callable[["BuildContext"], None]
 I_IMPORT_RE = re.compile(r'^\s*import\s+"([^"]+)"', re.MULTILINE)
 
 
+def resolve_i_tool(tool_name: str) -> Path | None:
+    i_home = os.environ.get("I_HOME")
+    if i_home:
+        candidate = Path(i_home) / tool_name
+        if candidate.exists():
+            return candidate
+
+    found = shutil.which(tool_name)
+    return Path(found) if found else None
+
+
+def require_i_tool(tool_name: str) -> Path:
+    found = resolve_i_tool(tool_name)
+    if found:
+        return found
+    raise SystemExit(
+        f"{tool_name} not found. Set I_HOME to the I package directory "
+        f"or put that directory on PATH."
+    )
+
+
 class BuildArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         self.print_help(sys.stderr)
@@ -92,7 +113,9 @@ class BuildContext:
 
     @property
     def i_compiler_path(self) -> Path:
-        compiler = self.project.i_compiler or Path("build") / "I.exe"
+        if self.project.i_compiler is None:
+            return require_i_tool("I.exe")
+        compiler = self.project.i_compiler
         if compiler.is_absolute():
             return compiler
         return self.root_dir / compiler
@@ -287,7 +310,10 @@ def command_i_translate(ctx: BuildContext) -> None:
             cwd=ctx.project.i_compiler_build_cwd or ctx.root_dir,
         )
     if not compiler.exists():
-        raise SystemExit(f"I compiler not found: {compiler}")
+        raise SystemExit(
+            f"I compiler not found: {compiler}. Set I_HOME to the I package "
+            f"directory or put that directory on PATH."
+        )
 
     ctx.i_generated_dir.mkdir(parents=True, exist_ok=True)
     if i_translation_is_up_to_date(ctx):
