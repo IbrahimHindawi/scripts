@@ -43,6 +43,7 @@ class Project:
     root_dir: Path = field(default_factory=lambda: Path.cwd())
     generator: str = "Ninja"
     c_compiler: str = "clang-cl"
+    cxx_compiler: str = "clang-cl"
     debugger: tuple[str, ...] = ("devenv", "/debugexe")
     hooks: dict[str, Hook] = field(default_factory=dict)
     extra_clean_paths: tuple[Path, ...] = ()
@@ -77,6 +78,10 @@ class BuildContext:
     @property
     def c_compiler(self) -> str:
         return self.project.c_compiler
+
+    @property
+    def cxx_compiler(self) -> str:
+        return self.project.cxx_compiler
 
     @property
     def is_i_project(self) -> bool:
@@ -165,6 +170,7 @@ def cmake_configure(
     generator: str,
     c_compiler: str,
     build_type: str,
+    cxx_compiler: str | None = None,
     defines: dict[str, object] | None = None,
     cwd: Path | str | None = None,
 ) -> None:
@@ -180,6 +186,8 @@ def cmake_configure(
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     ]
+    if cxx_compiler:
+        args.append(f"-DCMAKE_CXX_COMPILER={cxx_compiler}")
     for key, value in (defines or {}).items():
         if isinstance(value, bool):
             value = "ON" if value else "OFF"
@@ -320,6 +328,7 @@ def command_config(ctx: BuildContext) -> None:
         build_dir=ctx.build_dir,
         generator=ctx.generator,
         c_compiler=ctx.c_compiler,
+        cxx_compiler=ctx.cxx_compiler,
         build_type=ctx.config.cmake_build_type,
         defines=ctx.cmake_defines,
     )
@@ -376,6 +385,7 @@ def main(
     root_dir: Path | None = None,
     generator: str = "Ninja",
     c_compiler: str = "clang-cl",
+    cxx_compiler: str = "clang-cl",
     debugger: Iterable[str] = ("devenv", "/debugexe"),
     hooks: dict[str, Hook] | None = None,
     extra_clean_paths: Iterable[str | Path] = (),
@@ -408,6 +418,7 @@ def main(
         root_dir=root_dir or Path.cwd(),
         generator=generator,
         c_compiler=c_compiler,
+        cxx_compiler=cxx_compiler,
         debugger=tuple(debugger),
         hooks=hooks or {},
         extra_clean_paths=tuple(Path(p) for p in extra_clean_paths),
