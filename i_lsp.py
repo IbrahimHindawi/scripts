@@ -182,6 +182,7 @@ class Symbol:
     enum_owner: str = ""
     enum_item: str = ""
     type_param: str = ""
+    generic_pattern: str = ""
 
 
 @dataclass(frozen=True)
@@ -393,7 +394,99 @@ def project_entry_for_doc(doc: Document) -> Path | None:
     return project_entry_map(root).get(path, path)
 
 
+def ident_start(ch: str) -> bool:
+    return ch == "_" or ch.isalpha()
+
+
+def ident_continue(ch: str) -> bool:
+    return ch == "_" or ch.isalnum()
+
+
+def parse_balanced_angle(text: str, open_pos: int) -> int:
+    if open_pos >= len(text) or text[open_pos] != "<":
+        return -1
+    depth = 0
+    for pos in range(open_pos, len(text)):
+        ch = text[pos]
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+            if depth == 0:
+                return pos + 1
+    return -1
+
+
+def generic_ident_parts(ident: str) -> tuple[str, str, str] | None:
+    if not ident:
+        return None
+    match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", ident)
+    if not match:
+        return None
+    base = match.group(0)
+    base_end = match.end()
+    if base_end >= len(ident) or ident[base_end] != "<":
+        return None
+    angle_end = parse_balanced_angle(ident, base_end)
+    if angle_end < 0:
+        return None
+    tail = ident[angle_end:]
+    if tail and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", tail):
+        return None
+    return base, ident[base_end + 1 : angle_end - 1].strip(), tail
+
+
+def iter_identifier_spans(line: str):
+    pos = 0
+    while pos < len(line):
+        ch = line[pos]
+        if not ident_start(ch):
+            pos += 1
+            continue
+        if pos > 0 and ident_continue(line[pos - 1]):
+            pos += 1
+            continue
+
+        start = pos
+        pos += 1
+        while pos < len(line) and ident_continue(line[pos]):
+            pos += 1
+
+        if pos < len(line) and line[pos] == "<":
+            angle_end = parse_balanced_angle(line, pos)
+            if angle_end > 0:
+                pos = angle_end
+                if pos < len(line) and ident_start(line[pos]):
+                    pos += 1
+                    while pos < len(line) and ident_continue(line[pos]):
+                        pos += 1
+
+        yield start, pos, line[start:pos]
+
+
+def split_top_level_type_args(args: str) -> list[str]:
+    out: list[str] = []
+    start = 0
+    depth = 0
+    for i, ch in enumerate(args):
+        if ch == "<":
+            depth += 1
+        elif ch == ">" and depth > 0:
+            depth -= 1
+        elif ch == "," and depth == 0:
+            out.append(args[start:i].strip())
+            start = i + 1
+    final = args[start:].strip()
+    if final:
+        out.append(final)
+    return out
+
+
 def normalize_symbol_name(name: str) -> str:
+    parts = generic_ident_parts(name.strip())
+    if parts:
+        base, _args, tail = parts
+        return f"{base}<T>{tail}"
     return re.sub(r"<[^>]*>", "<T>", name)
 
 
@@ -420,8 +513,8 @@ def generic_type_arg(type_name: str) -> str:
     out = re.sub(r"\b(const|let)\b", "", out).strip()
     while out.startswith("*"):
         out = out[1:].strip()
-    match = re.match(r"[A-Za-z_][A-Za-z0-9_]*\s*<\s*([^>\n]+)\s*>", out)
-    return match.group(1).strip() if match else ""
+    parts = generic_ident_parts(re.sub(r"\s+", "", out))
+    return parts[1] if parts else ""
 
 
 def substitute_simple_generic_type(type_name: str, owner_type: str, type_param: str = "T") -> str:
@@ -550,29 +643,31 @@ def token_range_at(text: str, line: int, col: int) -> tuple[str, int, int]:
     if line >= len(lines):
         return "", 0, 0
     clean_line = sanitize_code_line(lines[line])
-    for match in IDENT_RE.finditer(clean_line):
-        if match.start() <= col <= match.end():
-            return generic_token_range_at(match.group(0), match.start(), col)
+    for start, end, ident in iter_identifier_spans(clean_line):
+        if start <= col <= end:
+            return generic_token_range_at(ident, start, col)
     return "", 0, 0
 
 
 def generic_token_range_at(ident: str, start: int, col: int) -> tuple[str, int, int]:
-    match = GENERIC_IDENT_RE.fullmatch(ident)
-    if not match:
+    parts = generic_ident_parts(ident)
+    if not parts:
         return ident, start, start + len(ident)
 
-    base, args, tail = match.group(1), match.group(2), match.group(3) or ""
+    base, args, tail = parts
     base_start = start
     base_end = base_start + len(base)
-    if base_start <= col <= base_end:
+    if tail and base_start <= col <= base_end:
         return base, base_start, base_end
 
     args_start = base_end + 1
-    for arg_match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", args):
-        arg_start = args_start + arg_match.start()
-        arg_end = args_start + arg_match.end()
-        if arg_start <= col <= arg_end:
-            return arg_match.group(0), arg_start, arg_end
+    args_end = args_start + len(args)
+    if args_start <= col <= args_end:
+        for arg_start, arg_end, arg_ident in iter_identifier_spans(args):
+            absolute_start = args_start + arg_start
+            absolute_end = args_start + arg_end
+            if absolute_start <= col <= absolute_end:
+                return generic_token_range_at(arg_ident, absolute_start, col)
 
     if tail:
         tail_start = start + len(base) + len(args) + 2
@@ -598,8 +693,8 @@ def position_to_lsp(line: int, start: int, end: int) -> dict:
 def iter_identifiers(text: str):
     for line_no, raw_line in enumerate(text.splitlines()):
         line = sanitize_code_line(raw_line)
-        for match in IDENT_RE.finditer(line):
-            yield line_no, match.start(), match.end(), match.group(0), raw_line
+        for start, end, ident in iter_identifier_spans(line):
+            yield line_no, start, end, ident, raw_line
 
 
 def document_lines(doc: Document) -> list[str]:
@@ -814,8 +909,8 @@ def symbol_names_match(candidate: str, target: str) -> bool:
 
 
 def identifier_reference_ranges(ident: str, start: int, target: str) -> list[tuple[int, int]]:
-    match = GENERIC_IDENT_RE.fullmatch(ident)
-    if not match:
+    parts = generic_ident_parts(ident)
+    if not parts:
         if symbol_names_match(ident, target):
             return [(start, start + len(ident))]
         return []
@@ -823,16 +918,15 @@ def identifier_reference_ranges(ident: str, start: int, target: str) -> list[tup
     if symbol_names_match(ident, target):
         return [(start, start + len(ident))]
 
-    base, args = match.group(1), match.group(2)
+    base, args, _tail = parts
     ranges: list[tuple[int, int]] = []
     if symbol_names_match(base, target):
         ranges.append((start, start + len(base)))
 
     args_start = start + len(base) + 1
-    for arg_match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", args):
-        arg = arg_match.group(0)
+    for arg_start, arg_end, arg in iter_identifier_spans(args):
         if symbol_names_match(arg, target):
-            ranges.append((args_start + arg_match.start(), args_start + arg_match.end()))
+            ranges.append((args_start + arg_start, args_start + arg_end))
     return ranges
 
 
@@ -1252,20 +1346,19 @@ class Workspace:
                 if "<" not in ident:
                     add(ident, doc.uri, line, start, end)
                     continue
-                match = GENERIC_IDENT_RE.fullmatch(ident)
-                if match:
-                    base, args = match.group(1), match.group(2)
+                parts = generic_ident_parts(ident)
+                if parts:
+                    base, args, _tail = parts
                     add_keys([ident, normalize_symbol_name(ident)], doc.uri, line, start, end)
                     add(base, doc.uri, line, start, start + len(base))
                     args_start = start + len(base) + 1
-                    for arg_match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", args):
-                        arg = arg_match.group(0)
+                    for arg_start, arg_end, arg in iter_identifier_spans(args):
                         add_keys(
                             [arg, normalize_symbol_name(arg), base_symbol_name(arg)],
                             doc.uri,
                             line,
-                            args_start + arg_match.start(),
-                            args_start + arg_match.end(),
+                            args_start + arg_start,
+                            args_start + arg_end,
                         )
                     continue
                 add_keys([ident, normalize_symbol_name(ident), base_symbol_name(ident)], doc.uri, line, start, end)
@@ -2170,7 +2263,25 @@ def compiler_symbol_to_lsp_symbol(
             enum_item = raw_item
     raw_type_param = item.get("type_param", "")
     type_param = raw_type_param if isinstance(raw_type_param, str) else ""
-    return Symbol(name, kind, symbol_uri, line, col, detail, source_len, tuple(params), return_type, variadic, target_type, enum_owner, enum_item, type_param)
+    raw_generic_pattern = item.get("generic_pattern", "")
+    generic_pattern = raw_generic_pattern if isinstance(raw_generic_pattern, str) else ""
+    return Symbol(
+        name,
+        kind,
+        symbol_uri,
+        line,
+        col,
+        detail,
+        source_len,
+        tuple(params),
+        return_type,
+        variadic,
+        target_type,
+        enum_owner,
+        enum_item,
+        type_param,
+        generic_pattern,
+    )
 
 
 def compiler_symbol_items_to_lsp_symbols(
@@ -2613,6 +2724,25 @@ def enum_completion_to_lsp(symbol: Symbol, expected_type: str) -> dict:
     }
 
 
+def enum_dot_completion_to_lsp(symbol: Symbol, owner: str, line: int, replace_start: int, col: int) -> dict:
+    member_owner, member_name = enum_member_parts(symbol)
+    label = member_name if member_owner == owner and member_name else symbol.name
+    return {
+        "label": label,
+        "kind": COMPLETION_KIND["enumMember"],
+        "detail": symbol.detail,
+        "documentation": {"kind": "markdown", "value": f"Enum value for `{owner}`."},
+        "sortText": f"enum:{label}",
+        "filterText": label,
+        "insertText": label,
+        "textEdit": {
+            "range": position_to_lsp(line, replace_start, col),
+            "newText": label,
+        },
+        "data": completion_data(symbol.kind, symbol.name, symbol.uri, symbol.line, symbol.col),
+    }
+
+
 def expected_assignment_type_at(workspace: Workspace, doc: Document, line: int, col: int) -> str:
     lines = doc.text.splitlines()
     if line >= len(lines):
@@ -2642,6 +2772,33 @@ def enum_completions_at(workspace: Workspace, doc: Document | None, line: int, c
     if not symbol or symbol.kind != "enum":
         return []
     return [enum_completion_to_lsp(member, symbol.name) for member in enum_members_for_owner(workspace, symbol.name)]
+
+
+def enum_dot_completions_at(workspace: Workspace, doc: Document | None, line: int, col: int) -> list[dict]:
+    if not doc:
+        return []
+    lines = document_clean_lines(doc)
+    if line >= len(lines):
+        return []
+    prefix = lines[line][:col]
+    match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)?$", prefix)
+    if not match:
+        return []
+    owner = match.group(1)
+    typed_member = match.group(2) or ""
+    symbol = workspace.find_symbol(owner)
+    if not symbol or symbol.kind != "enum":
+        return []
+    replace_start = match.start(2) if match.start(2) >= 0 else col
+    out: list[dict] = []
+    for member in enum_members_for_owner(workspace, owner):
+        _member_owner, member_name = enum_member_parts(member)
+        label = member_name or member.name
+        if typed_member and not label.startswith(typed_member):
+            continue
+        out.append(enum_dot_completion_to_lsp(member, owner, line, replace_start, col))
+    out.sort(key=lambda item: str(item.get("label", "")).lower())
+    return out
 
 
 def expected_type_completions_at(workspace: Workspace, doc: Document | None, line: int, col: int) -> list[dict]:
@@ -3044,6 +3201,25 @@ def enum_member_usage_name(symbol: Symbol) -> str:
     return f"{owner}_{item}" if owner and item else symbol.name
 
 
+def enum_member_dot_access_at(workspace: Workspace, raw_line: str, start: int, ident: str) -> Symbol | None:
+    dot = start - 1
+    if dot < 0 or raw_line[dot] != ".":
+        return None
+    left = sanitize_code_line(raw_line[:dot]).rstrip()
+    match = re.search(r"([A-Za-z_][A-Za-z0-9_]*)$", left)
+    if not match:
+        return None
+    owner = match.group(1)
+    owner_symbol = workspace.find_symbol(owner)
+    if not owner_symbol or owner_symbol.kind != "enum":
+        return None
+    for member in enum_members_for_owner(workspace, owner):
+        member_owner, member_name = enum_member_parts(member)
+        if member_owner == owner and member_name == ident:
+            return member
+    return None
+
+
 def identifier_is_call(raw_line: str, start: int, ident: str) -> bool:
     pos = start + len(ident)
     while pos < len(raw_line) and raw_line[pos].isspace():
@@ -3057,6 +3233,9 @@ def semantic_token_kind(workspace: Workspace, doc: Document, line: int, ident: s
     if ident in BUILTIN_TYPES:
         return "type"
     if start > 0 and raw_line[start - 1] == ".":
+        enum_member = enum_member_dot_access_at(workspace, raw_line, start, ident)
+        if enum_member:
+            return "enumMember"
         field = field_access_at(workspace, doc, line, start)
         if field and identifier_is_call(raw_line, start, ident) and proc_signature_detail_for_type(workspace, field.type_name):
             return "function"
@@ -3099,6 +3278,10 @@ def semantic_token_modifier_mask(workspace: Workspace, doc: Document, line: int,
         modifiers.append("defaultLibrary")
 
     if start > 0 and raw_line[start - 1] == ".":
+        enum_member = enum_member_dot_access_at(workspace, raw_line, start, ident)
+        if enum_member:
+            modifiers.append("member")
+            return semantic_modifier_mask(*modifiers)
         field = field_access_at(workspace, doc, line, start)
         if field:
             modifiers.append("member")
@@ -3169,6 +3352,9 @@ def semantic_token_info(
         return "type", semantic_modifier_mask("defaultLibrary")
 
     if start > 0 and raw_line[start - 1] == ".":
+        enum_member = enum_member_dot_access_at(workspace, raw_line, start, ident)
+        if enum_member:
+            return "enumMember", semantic_modifier_mask("member")
         key = (line, start)
         cached_field = field_access_cache.get(key)
         if cached_field is None:
@@ -3233,27 +3419,32 @@ def semantic_token_info(
 
 
 def generic_identifier_semantic_spans(workspace: Workspace, doc: Document, line: int, ident: str, start: int) -> list[tuple[int, int, str, int]]:
-    match = GENERIC_IDENT_RE.fullmatch(ident)
-    if not match:
+    parts = generic_ident_parts(ident)
+    if not parts:
         return []
 
     symbol = workspace.find_symbol(ident)
-    base, args, tail = match.group(1), match.group(2), match.group(3) or ""
+    generic_call_symbol = generic_proc_symbol_for_call(workspace, ident)
+    base, args, tail = parts
     if tail and (not symbol or symbol.kind != "proc"):
         return []
-    if not tail and symbol and symbol.kind not in ("struct", "union", "alias", "enum"):
+    if not tail and symbol and symbol.kind not in ("struct", "union", "alias", "enum") and not generic_call_symbol:
         return []
 
     base_modifiers: list[str] = ["generic"]
     base_symbol = workspace.find_symbol(base)
     if base_symbol and base_symbol.line == line and base_symbol.col == start:
         base_modifiers.append("declaration")
-    spans: list[tuple[int, int, str, int]] = [(start, len(base), "type", semantic_modifier_mask(*base_modifiers))]
+    base_kind = "function" if generic_call_symbol or (base_symbol and base_symbol.kind == "proc" and not tail) else "type"
+    spans: list[tuple[int, int, str, int]] = [(start, len(base), base_kind, semantic_modifier_mask(*base_modifiers))]
     args_start = start + len(base) + 1
-    for arg_match in re.finditer(r"[A-Za-z_][A-Za-z0-9_]*", args):
-        arg = arg_match.group(0)
+    for arg_start, arg_end, arg in iter_identifier_spans(args):
+        nested = generic_identifier_semantic_spans(workspace, doc, line, arg, args_start + arg_start)
+        if nested:
+            spans.extend(nested)
+            continue
         arg_modifiers = ["defaultLibrary"] if arg in BUILTIN_TYPES else []
-        spans.append((args_start + arg_match.start(), len(arg), "type", semantic_modifier_mask(*arg_modifiers)))
+        spans.append((args_start + arg_start, arg_end - arg_start, "type", semantic_modifier_mask(*arg_modifiers)))
     if tail:
         tail_modifiers = ["generic"]
         if symbol and symbol.line == line and symbol.col == start:
@@ -3504,8 +3695,21 @@ def pointer_pointee_type(type_name: str) -> str:
     return ""
 
 
-def indexed_element_type(type_name: str) -> str:
+def indexed_element_type(type_name: str, workspace: Workspace | None = None) -> str:
     out = canonical_type(type_name)
+    if workspace is not None:
+        seen: set[str] = set()
+        while re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", out):
+            if out in seen:
+                break
+            seen.add(out)
+            symbol = workspace.find_symbol(out)
+            if not symbol or symbol.kind != "alias":
+                break
+            rhs = canonical_type(symbol.target_type or alias_rhs(symbol.detail))
+            if not rhs:
+                break
+            out = rhs
     if out.startswith("*"):
         return out[1:]
     match = re.match(r"^\[[^\]]+\](.+)$", out)
@@ -3553,17 +3757,83 @@ def alias_rhs(detail: str) -> str:
 
 
 def generic_proc_call_parts(name: str) -> tuple[str, str, str] | None:
-    match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)<([^>\n]+)>([A-Za-z_][A-Za-z0-9_]*)", name.strip())
-    if not match:
-        return None
-    return match.group(1), match.group(2).strip(), match.group(3)
+    return generic_ident_parts(re.sub(r"\s+", "", name.strip()))
 
 
 def generic_proc_param_name(symbol: Symbol) -> str:
     if symbol.type_param:
         return symbol.type_param
-    match = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*<([^>\n]+)>[A-Za-z_][A-Za-z0-9_]*", symbol.name)
-    return match.group(1).strip() if match else ""
+    parts = generic_ident_parts(symbol.name)
+    return parts[1].strip() if parts else ""
+
+
+def canonical_type_text(type_name: str) -> str:
+    return re.sub(r"\s+", "", type_name.strip())
+
+
+def lsp_type_mangle(type_name: str) -> str:
+    text = canonical_type_text(type_name)
+    while text.startswith("*"):
+        text = "ptr_" + text[1:]
+    parts = generic_ident_parts(text)
+    if parts:
+        base, args, tail = parts
+        pieces = [base]
+        for arg in split_top_level_type_args(args):
+            pieces.append(lsp_type_mangle(arg))
+        if tail:
+            pieces.append(tail)
+        return "_".join(piece for piece in pieces if piece)
+    if text.startswith("["):
+        close = text.find("]")
+        if close >= 0:
+            count = text[1:close]
+            elem = text[close + 1 :]
+            return f"array_{count}_{lsp_type_mangle(elem)}"
+    return re.sub(r"[^A-Za-z0-9_]", "_", text)
+
+
+def generic_pattern_bind(pattern: str, arg: str, param: str) -> str:
+    pattern = canonical_type_text(pattern)
+    arg = canonical_type_text(arg)
+    param = param.strip()
+    if not pattern or not arg or not param:
+        return ""
+    if pattern == param:
+        return arg
+
+    pattern_parts = generic_ident_parts(pattern)
+    arg_parts = generic_ident_parts(arg)
+    if pattern_parts and arg_parts and pattern_parts[0] == arg_parts[0] and pattern_parts[2] == arg_parts[2]:
+        pattern_args = split_top_level_type_args(pattern_parts[1])
+        arg_args = split_top_level_type_args(arg_parts[1])
+        if len(pattern_args) != len(arg_args):
+            return ""
+        bound = ""
+        for pattern_arg, arg_arg in zip(pattern_args, arg_args):
+            candidate = generic_pattern_bind(pattern_arg, arg_arg, param)
+            if not candidate:
+                if canonical_type_text(pattern_arg) != canonical_type_text(arg_arg):
+                    return ""
+                continue
+            if bound and canonical_type_text(bound) != canonical_type_text(candidate):
+                return ""
+            bound = candidate
+        return bound
+
+    if pattern.startswith("*") and arg.startswith("*"):
+        return generic_pattern_bind(pattern[1:], arg[1:], param)
+
+    return ""
+
+
+def generic_proc_bound_arg(symbol: Symbol, call_arg: str) -> str:
+    param = generic_proc_param_name(symbol)
+    if not param:
+        return ""
+    if symbol.generic_pattern:
+        return generic_pattern_bind(symbol.generic_pattern, call_arg, param)
+    return call_arg
 
 
 def generic_proc_detail_for_call(symbol: Symbol, call_name: str) -> str:
@@ -3572,10 +3842,11 @@ def generic_proc_detail_for_call(symbol: Symbol, call_name: str) -> str:
     if not parts or not param:
         return symbol.detail
     _base, arg, _tail = parts
+    bound_arg = generic_proc_bound_arg(symbol, arg) or arg
     detail = symbol.detail
     detail = detail.replace(symbol.name, call_name, 1)
     detail = re.sub(rf"\bproc\s*<\s*{re.escape(param)}\s*>", "proc", detail, count=1)
-    detail = re.sub(rf"\b{re.escape(param)}\b", arg, detail)
+    detail = re.sub(rf"\b{re.escape(param)}\b", bound_arg, detail)
     return detail
 
 
@@ -3598,7 +3869,51 @@ def symbol_with_generic_call_detail(symbol: Symbol, call_name: str) -> Symbol:
         symbol.enum_owner,
         symbol.enum_item,
         symbol.type_param,
+        symbol.generic_pattern,
     )
+
+
+def symbol_with_call_name(symbol: Symbol, call_name: str) -> Symbol:
+    if symbol.kind != "proc":
+        return symbol
+    detail = symbol.detail.replace(symbol.name, call_name, 1)
+    return Symbol(
+        call_name,
+        symbol.kind,
+        symbol.uri,
+        symbol.line,
+        symbol.col,
+        detail,
+        symbol.source_len,
+        symbol.params,
+        symbol.return_type,
+        symbol.variadic,
+        symbol.target_type,
+        symbol.enum_owner,
+        symbol.enum_item,
+        symbol.type_param,
+        symbol.generic_pattern,
+    )
+
+
+def generic_proc_symbol_for_call(workspace: Workspace, call_name: str) -> Symbol | None:
+    parts = generic_proc_call_parts(call_name)
+    if not parts or parts[2]:
+        return None
+    base, arg, _tail = parts
+
+    concrete_name = f"{base}_{lsp_type_mangle(arg)}"
+    concrete = workspace.find_symbol(concrete_name)
+    if concrete and concrete.kind == "proc":
+        return symbol_with_call_name(concrete, call_name)
+
+    for symbol in workspace.all_symbols():
+        if symbol.kind != "proc" or symbol.name != base or not symbol.type_param:
+            continue
+        if symbol.generic_pattern and not generic_pattern_bind(symbol.generic_pattern, arg, symbol.type_param):
+            continue
+        return symbol_with_generic_call_detail(symbol, call_name)
+    return None
 
 
 def proc_parameter_labels_for_symbol(symbol: Symbol, call_name: str) -> list[str]:
@@ -3609,7 +3924,8 @@ def proc_parameter_labels_for_symbol(symbol: Symbol, call_name: str) -> list[str
     param = generic_proc_param_name(symbol)
     if parts and param:
         _base, arg, _tail = parts
-        labels = [re.sub(rf"\b{re.escape(param)}\b", arg, label) for label in labels]
+        bound_arg = generic_proc_bound_arg(symbol, arg) or arg
+        labels = [re.sub(rf"\b{re.escape(param)}\b", bound_arg, label) for label in labels]
     return labels
 
 
@@ -3619,7 +3935,8 @@ def proc_return_type_for_symbol(symbol: Symbol, call_name: str) -> str:
     param = generic_proc_param_name(symbol)
     if ret and parts and param:
         _base, arg, _tail = parts
-        ret = re.sub(rf"\b{re.escape(param)}\b", arg, ret)
+        bound_arg = generic_proc_bound_arg(symbol, arg) or arg
+        ret = re.sub(rf"\b{re.escape(param)}\b", bound_arg, ret)
     return ret or "void"
 
 
@@ -3711,7 +4028,7 @@ def proc_return_type_for_type(workspace: Workspace, type_name: str) -> str:
 
 def callable_parameter_labels_for_name(workspace: Workspace, doc: Document, name: str, line: int | None = None) -> list[str]:
     name = re.sub(r"\s+", "", name)
-    symbol = workspace.find_symbol(name)
+    symbol = workspace.find_symbol(name) or generic_proc_symbol_for_call(workspace, name)
     if symbol and symbol.kind == "proc":
         return proc_parameter_labels_for_symbol(symbol, name)
     variable = workspace.find_variable_at(doc, name, line) if line is not None else workspace.find_variable(doc, name)
@@ -3752,7 +4069,7 @@ def infer_simple_expr_type(workspace: Workspace, doc: Document, expr: str, line:
     if literal:
         return literal
     call_match = re.fullmatch(
-        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?(?:[A-Za-z_][A-Za-z0-9_]*)?(?:(?:\s*\[[^\]]+\])?\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\(.*\)",
+        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^()\n]+>)?(?:[A-Za-z_][A-Za-z0-9_]*)?(?:(?:\s*\[[^\]]+\])?\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\(.*\)",
         expr,
     )
     if call_match:
@@ -3760,7 +4077,7 @@ def infer_simple_expr_type(workspace: Workspace, doc: Document, expr: str, line:
     indexed_match = re.fullmatch(r"(.+)\[[^\]]+\]", expr)
     if indexed_match:
         base_type = infer_simple_expr_type(workspace, doc, indexed_match.group(1), line)
-        return indexed_element_type(base_type)
+        return indexed_element_type(base_type, workspace)
     chain_type = expr_chain_type(workspace, doc, expr, line)
     if chain_type:
         return chain_type
@@ -3776,10 +4093,6 @@ def call_context_before_cursor(doc: Document, line: int, col: int) -> tuple[str,
     if line >= len(lines):
         return "", 0
     prefix = sanitize_code_line(lines[line][:col])
-    name_pattern = re.compile(
-        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?(?:[A-Za-z_][A-Za-z0-9_]*)?"
-        r"(?:(?:\s*\[[^\]]+\])?\s*\.\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*$"
-    )
     frames: list[dict] = []
     in_string = False
     in_char = False
@@ -3810,8 +4123,7 @@ def call_context_before_cursor(doc: Document, line: int, col: int) -> tuple[str,
             escaped = False
             continue
         if ch == "(":
-            match = name_pattern.search(prefix[:i])
-            name = match.group(1) if match else ""
+            name = callable_name_before_paren(prefix[:i])
             if name in KEYWORDS:
                 name = ""
             frames.append({"name": name, "active": 0, "bracket": 0, "brace": 0})
@@ -3842,9 +4154,56 @@ def call_name_before_cursor(doc: Document, line: int, col: int) -> str:
     return name
 
 
+def identifier_span_ending_at(text: str, end: int) -> tuple[int, int, str] | None:
+    for start, span_end, ident in iter_identifier_spans(text):
+        if span_end == end:
+            return start, span_end, ident
+    return None
+
+
+def matching_open_bracket_before(text: str, close_pos: int) -> int:
+    depth = 0
+    for pos in range(close_pos, -1, -1):
+        ch = text[pos]
+        if ch == "]":
+            depth += 1
+        elif ch == "[":
+            depth -= 1
+            if depth == 0:
+                return pos
+    return -1
+
+
+def callable_name_before_paren(prefix: str) -> str:
+    clean = prefix.rstrip()
+    if not clean:
+        return ""
+    span = identifier_span_ending_at(clean, len(clean))
+    if not span:
+        return ""
+    start, _end, _ident = span
+
+    while True:
+        left = clean[:start].rstrip()
+        while left.endswith("]"):
+            open_pos = matching_open_bracket_before(left, len(left) - 1)
+            if open_pos < 0:
+                break
+            left = left[:open_pos].rstrip()
+        if not left.endswith("."):
+            break
+        before_dot = left[:-1].rstrip()
+        prev = identifier_span_ending_at(before_dot, len(before_dot))
+        if not prev:
+            break
+        start = prev[0]
+
+    return re.sub(r"\s+", "", clean[start:])
+
+
 def signature_help_at(workspace: Workspace, doc: Document, line: int, col: int) -> dict | None:
     name, active_parameter = call_context_before_cursor(doc, line, col)
-    symbol = workspace.find_symbol(name) if name else None
+    symbol = (workspace.find_symbol(name) or generic_proc_symbol_for_call(workspace, name)) if name else None
     label = ""
     parameters: list[dict] = []
     if symbol and symbol.kind == "proc":
@@ -4632,6 +4991,12 @@ class LspServer:
                     request_line,
                     request_col,
                 )
+                enum_dot_items = enum_dot_completions_at(
+                    self.workspace,
+                    doc,
+                    request_line,
+                    request_col,
+                )
                 expected_items = expected_type_completions_at(
                     self.workspace,
                     doc,
@@ -4649,6 +5014,7 @@ class LspServer:
                 )
                 context_items = (
                     type_field_items
+                    or enum_dot_items
                     or generic_owner_proc_items
                     or struct_field_items
                     or argument_items
@@ -4757,6 +5123,9 @@ class LspServer:
         symbol = self.workspace.find_symbol(name)
         if symbol:
             return symbol_with_generic_call_detail(symbol, name)
+        generic_symbol = generic_proc_symbol_for_call(self.workspace, name)
+        if generic_symbol:
+            return generic_symbol
         enum_usage = self.workspace.find_enum_member_usage(name)
         if enum_usage:
             return enum_usage
