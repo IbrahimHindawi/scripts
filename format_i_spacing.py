@@ -61,6 +61,19 @@ def format_line(line: str) -> str:
             i += 1
             continue
 
+        # `proc() -> T`, never `proc()->T`. Safe to do blindly: ilang spells
+        # dereference `[0].`, so `->` is only ever the return arrow. Strings,
+        # chars, comments and `#` lines are already excluded above.
+        if ch == "-" and next_ch == ">":
+            while out and out[-1] == " ":
+                out.pop()
+            # A line that begins with the arrow keeps its indentation.
+            out.append(" -> " if any(c != " " for c in out) else "-> ")
+            i += 2
+            while i < len(line) and line[i] == " ":
+                i += 1
+            continue
+
         out.append(ch)
         i += 1
 

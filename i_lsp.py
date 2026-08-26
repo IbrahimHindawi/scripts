@@ -104,6 +104,7 @@ SEMANTIC_MODIFIER_INDEX = {name: index for index, name in enumerate(SEMANTIC_TOK
 KEYWORDS = {
     "alias",
     "and",
+    "false",
     "break",
     "case",
     "cinclude",
@@ -114,34 +115,74 @@ KEYWORDS = {
     "else",
     "enum",
     "for",
+    "goto",
     "if",
     "import",
+    "label",
     "or",
     "proc",
     "return",
     "shl",
     "shr",
+    "static",
     "struct",
     "switch",
+    "true",
     "union",
+    "volatile",
     "while",
 }
 
 BUILTIN_TYPES = {
-    "bool",
+    # Booleans carry their width; b32 is the default. `char` is still a legal
+    # spelling but normalises to c8, which is what the compiler reports back.
+    "b8",
+    "b16",
+    "b32",
+    "b64",
+    "c8",
     "char",
+    # C's own spellings, which pass straight through -- njinn uses `long` for
+    # the ftell/fseek signatures. Legal type names, so an editor should colour
+    # them as such.
+    "double",
+    "float",
+    "int",
+    "long",
+    "short",
+    "ulong",
     "f32",
     "f64",
     "i8",
     "i16",
     "i32",
     "i64",
+    "intmax",
+    "intptr",
+    "ptrdiff",
     "u8",
     "u16",
     "u32",
     "u64",
+    "uintmax",
+    "uintptr",
+    "usize",
     "void",
 }
+
+# Compiler-known reflection types. `Type<>` yields a `reflect`, and these are the
+# records reachable from it, so they should resolve like any other named type
+# rather than looking undefined.
+REFLECT_TYPES = {
+    "reflect",
+    "reflect_field",
+    "reflect_kind",
+    "reflect_type_kind",
+    "reflect_value",
+    "reflect_variant",
+}
+
+BUILTIN_TYPES |= REFLECT_TYPES
 
 
 @dataclass(frozen=True)
@@ -930,13 +971,38 @@ def identifier_reference_ranges(ident: str, start: int, target: str) -> list[tup
     return ranges
 
 
+def import_search_roots(path: Path | None) -> list[Path]:
+    """Where an import is looked for, in order.
+
+    The importing file's own directory comes first, which covers a project whose
+    modules sit beside each other. The standard library does not: it ships next
+    to the compiler, so `import "std/memops.i"` resolves there rather than
+    relative to whichever file imported it. Without those roots every file that
+    imports std reported a missing import and lost every symbol behind it --
+    njinn's pch.i alone imports std eight times.
+    """
+    roots: list[Path] = []
+    if path:
+        roots.append(path.parent)
+    roots.append(I_EXE.parent)
+    roots.append(ROOT / "src")
+    return roots
+
+
 def resolve_import(path: Path | None, import_path: str) -> Path | None:
     raw = Path(import_path)
     if raw.is_absolute():
         return raw
-    if path:
-        return (path.parent / raw).resolve()
-    return raw.resolve()
+    first: Path | None = None
+    for root in import_search_roots(path):
+        candidate = (root / raw).resolve()
+        if first is None:
+            first = candidate
+        if candidate.exists():
+            return candidate
+    # Nothing matched. Return the file-relative reading so the missing-import
+    # diagnostic still points where the author meant it to.
+    return first if first is not None else raw.resolve()
 
 
 def extract_path_symbols(
@@ -2997,32 +3063,57 @@ def field_with_owner_type(field: FieldSymbol, owner_type: str) -> FieldSymbol:
     )
 
 
-REFLECT_TYPE_FIELDS: tuple[tuple[str, str], ...] = (
-    ("name", "*const char"),
+# One record describes struct, union and enum alike, so `<>` offers the same
+# fields whatever the owner is. `kind` says which it is and `variant` holds the
+# arm only that kind has -- which is why there is no longer a per-kind table
+# here for completion to pick between.
+REFLECT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("name", "*const c8"),
     ("size", "u64"),
     ("align", "u64"),
-    ("field_count", "u64"),
-    ("fields", "*const i_reflect_field"),
-)
-
-REFLECT_ENUM_FIELDS: tuple[tuple[str, str], ...] = (
-    ("name", "*const char"),
-    ("size", "u64"),
-    ("align", "u64"),
-    ("value_count", "u64"),
-    ("values", "*const i_reflect_enum_value"),
+    ("kind", "i32"),
+    ("count", "u64"),
+    ("variant", "const reflect_variant"),
 )
 
 
-def reflect_metadata_fields_for_symbol(symbol: Symbol, owner_type: str) -> list[FieldSymbol]:
-    if symbol.kind == "enum":
-        field_types = REFLECT_ENUM_FIELDS
-    elif symbol.kind in {"struct", "union"}:
-        field_types = REFLECT_TYPE_FIELDS
-    else:
-        return []
+# `variant` is a union, and the compiler rejects the arm that is not live for the
+# owner's kind. Offering both would suggest something that cannot compile, so
+# each kind gets only its own arm -- which makes the diagnostic hard to reach by
+# accident rather than merely recoverable once hit.
+REFLECT_VARIANT_ARMS: dict[str, tuple[tuple[str, str], ...]] = {
+    "struct": (("fields", "*const reflect_field"),),
+    "union": (("fields", "*const reflect_field"),),
+    "enum": (("values", "*const reflect_value"),),
+}
 
-    owner_label = f"{owner_type}<>"
+REFLECT_FIELD_MEMBERS: tuple[tuple[str, str], ...] = (
+    ("name", "*const c8"),
+    ("type", "*const c8"),
+    ("attrs", "*const c8"),
+    ("offset", "u64"),
+    ("size", "u64"),
+    ("align", "u64"),
+    ("kind", "i32"),
+    ("array_count", "u64"),
+    ("pointer_depth", "u64"),
+    ("base_type", "*const c8"),
+    ("elem_type", "*const c8"),
+    ("generic_arg_type", "*const c8"),
+    ("is_const", "u64"),
+    # The nested record for this field's own type, so a walk can recurse.
+    ("info", "*const reflect"),
+)
+
+REFLECT_VALUE_MEMBERS: tuple[tuple[str, str], ...] = (
+    ("name", "*const c8"),
+    ("value", "i32"),
+)
+
+
+def reflect_fields_from_table(
+    symbol: Symbol, owner_label: str, table: tuple[tuple[str, str], ...]
+) -> list[FieldSymbol]:
     return [
         FieldSymbol(
             owner=owner_label,
@@ -3034,8 +3125,16 @@ def reflect_metadata_fields_for_symbol(symbol: Symbol, owner_type: str) -> list[
             col=symbol.col,
             detail=f"{owner_label}.{name}: {type_name}",
         )
-        for name, type_name in field_types
+        for name, type_name in table
     ]
+
+
+def reflect_metadata_fields_for_symbol(symbol: Symbol, owner_type: str) -> list[FieldSymbol]:
+    if symbol.kind not in {"enum", "struct", "union"}:
+        return []
+    field_types = REFLECT_FIELDS
+
+    return reflect_fields_from_table(symbol, f"{owner_type}<>", field_types)
 
 
 def completion_symbol_from_data(
@@ -4359,13 +4458,53 @@ def reflect_field_completions_at(workspace: Workspace, doc: Document | None, lin
     if line >= len(lines):
         return []
     prefix = lines[line][:col]
+
+    def owner_symbol(name: str) -> Symbol | None:
+        return workspace.find_symbol(name) or workspace.find_symbol(normalize_type_name(name))
+
+    # Deepest form first: a member of a field or value record reached through the
+    # variant, e.g. `Point<>.variant.fields[0].`
+    match = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?)<>\s*\.\s*variant\s*\.\s*"
+        r"(fields|values)\s*\[[^\]]*\]\s*\.\s*[A-Za-z_][A-Za-z0-9_]*$|"
+        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?)<>\s*\.\s*variant\s*\.\s*"
+        r"(fields|values)\s*\[[^\]]*\]\s*\.\s*$",
+        prefix,
+    )
+    if match:
+        owner_type = (match.group(1) or match.group(3)).strip()
+        arm = match.group(2) or match.group(4)
+        symbol = owner_symbol(owner_type)
+        if not symbol or symbol.kind not in REFLECT_VARIANT_ARMS:
+            return []
+        table = REFLECT_FIELD_MEMBERS if arm == "fields" else REFLECT_VALUE_MEMBERS
+        record = "reflect_field" if arm == "fields" else "reflect_value"
+        return reflect_fields_from_table(symbol, record, table)
+
+    # The variant itself: only the arm that is live for this owner's kind.
+    match = re.search(
+        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?)<>\s*\.\s*variant\s*\.\s*"
+        r"[A-Za-z_][A-Za-z0-9_]*$|"
+        r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?)<>\s*\.\s*variant\s*\.\s*$",
+        prefix,
+    )
+    if match:
+        owner_type = (match.group(1) or match.group(2)).strip()
+        symbol = owner_symbol(owner_type)
+        if not symbol:
+            return []
+        arms = REFLECT_VARIANT_ARMS.get(symbol.kind)
+        if not arms:
+            return []
+        return reflect_fields_from_table(symbol, f"{owner_type}<>.variant", arms)
+
     match = re.search(r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?)<>\s*\.\s*[A-Za-z_][A-Za-z0-9_]*$", prefix)
     if not match:
         match = re.search(r"([A-Za-z_][A-Za-z0-9_]*(?:<[^>\n]+>)?)<>\s*\.\s*$", prefix)
     if not match:
         return []
     owner_type = match.group(1).strip()
-    symbol = workspace.find_symbol(owner_type) or workspace.find_symbol(normalize_type_name(owner_type))
+    symbol = owner_symbol(owner_type)
     if not symbol:
         return []
     return reflect_metadata_fields_for_symbol(symbol, owner_type)
