@@ -61,6 +61,19 @@ def format_line(line: str) -> str:
             i += 1
             continue
 
+        # `proc() -> T`, never `proc()->T`. Safe to do blindly: rin spells
+        # dereference `[0].`, so `->` is only ever the return arrow. Strings,
+        # chars, comments and `#` lines are already excluded above.
+        if ch == "-" and next_ch == ">":
+            while out and out[-1] == " ":
+                out.pop()
+            # A line that begins with the arrow keeps its indentation.
+            out.append(" -> " if any(c != " " for c in out) else "-> ")
+            i += 2
+            while i < len(line) and line[i] == " ":
+                i += 1
+            continue
+
         out.append(ch)
         i += 1
 
@@ -88,7 +101,7 @@ def main() -> int:
         if root.is_file():
             paths = [root]
         else:
-            paths = sorted(root.rglob("*.i"))
+            paths = sorted(root.rglob("*.rin"))
         for path in paths:
             if format_file(path):
                 print(path)

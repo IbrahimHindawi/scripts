@@ -6,25 +6,25 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_IBIND = ROOT.parent / "i" / "build" / "ibind.exe"
+DEFAULT_RINBIND = ROOT.parent / "rin" / "build" / "rinbind.exe"
 DEFAULT_HEADER = ROOT / "extern" / "cgltf" / "cgltf.h"
-DEFAULT_OUTPUT = ROOT / "src" / "bindings" / "cgltf.i"
+DEFAULT_OUTPUT = ROOT / "src" / "bindings" / "cgltf.rin"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate focused I bindings for cgltf.h.")
-    parser.add_argument("--ibind", type=Path, default=DEFAULT_IBIND)
+    parser = argparse.ArgumentParser(description="Generate focused rin bindings for cgltf.h.")
+    parser.add_argument("--rinbind", type=Path, default=DEFAULT_RINBIND)
     parser.add_argument("--header", type=Path, default=DEFAULT_HEADER)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--print-cmd", action="store_true")
     args = parser.parse_args()
 
-    ibind = args.ibind.resolve()
+    rinbind = args.rinbind.resolve()
     header = args.header.resolve()
     output = args.output.resolve()
 
-    if not ibind.exists():
-        raise SystemExit(f"missing ibind executable: {ibind}")
+    if not rinbind.exists():
+        raise SystemExit(f"missing rinbind executable: {rinbind}")
     if not header.exists():
         raise SystemExit(f"missing cgltf header: {header}")
 
@@ -34,7 +34,7 @@ def main() -> None:
         tmp_output.unlink()
 
     cmd = [
-        str(ibind),
+        str(rinbind),
         str(header),
         str(tmp_output),
         "--filter",
