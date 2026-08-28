@@ -4460,7 +4460,25 @@ def reflect_field_completions_at(workspace: Workspace, doc: Document | None, lin
     prefix = lines[line][:col]
 
     def owner_symbol(name: str) -> Symbol | None:
-        return workspace.find_symbol(name) or workspace.find_symbol(normalize_type_name(name))
+        direct = workspace.find_symbol(name) or workspace.find_symbol(normalize_type_name(name))
+        if direct:
+            return direct
+        # `<>` works on a value as well as a type, and a value reflects its own
+        # type -- so `s<>` where `s: status` is the `status` record. Without this
+        # the three reflect paths above all miss, and the client falls back to
+        # offering every symbol in the workspace, which is worse than offering
+        # nothing. A type of the same name still wins, matching the compiler.
+        for candidate in workspace.completion_symbols_at(doc, line):
+            if getattr(candidate, "kind", "") not in ("variable", "parameter"):
+                continue
+            if candidate.name != name:
+                continue
+            type_name = getattr(candidate, "type_name", "")
+            if not type_name:
+                return None
+            return (workspace.find_symbol(type_name)
+                    or workspace.find_symbol(normalize_type_name(type_name)))
+        return None
 
     # Deepest form first: a member of a field or value record reached through the
     # variant, e.g. `Point<>.variant.fields[0].`
