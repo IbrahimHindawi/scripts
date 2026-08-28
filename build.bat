@@ -60,7 +60,7 @@ goto :eof
 call :ResolveConfig %1
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 if not exist %builddir% mkdir %builddir%
-cmake -S . -B %builddir% -G %generator% -DCMAKE_C_COMPILER=clang-cl "-DCMAKE_BUILD_TYPE=%cmakeconfig%"
+cmake -S . -B %builddir% -G %generator% -DCMAKE_C_COMPILER=clang-cl -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "-DCMAKE_BUILD_TYPE=%cmakeconfig%"
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 goto :eof
 
@@ -71,7 +71,7 @@ call :InjectResources %builddir%\res
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 call :BuildHaikal
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
-call %haikalexe% --entry src\main.c --meta extern\haikal\src\meta_arena
+call %haikalexe% --compile-db %builddir%\compile_commands.json --meta extern\haikal\src\meta_arena --entry src\main.c
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
 cmake --build %builddir%
 if not %ERRORLEVEL% EQU 0 exit /b %ERRORLEVEL%
