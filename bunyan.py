@@ -415,6 +415,7 @@ def main(
     debugger: Iterable[str] = ("devenv", "/debugexe"),
     hooks: dict[str, Hook] | None = None,
     extra_clean_paths: Iterable[str | Path] = (),
+    build_configs: dict[str, BuildConfig] | None = None,
 ) -> None:
     parser = BuildArgumentParser()
     parser.add_argument("command", choices=("config", "build", "run", "debugexe", "clean"))
@@ -423,6 +424,8 @@ def main(
     args = parser.parse_args()
 
     configs = default_configs()
+    if build_configs:
+        configs.update(build_configs)
     if args.config not in configs:
         raise SystemExit(f"unknown config: {args.config}")
     if mode not in ("c", "i"):
