@@ -2727,7 +2727,7 @@ def proc_argument_completions_at(workspace: Workspace, doc: Document | None, lin
             items.append(argument_completion_item(symbol, expected_type, insert_text, symbol.detail, 0))
             continue
         if expected_canon.startswith("*") and actual_type == expected_canon[1:]:
-            insert_text = f"{symbol.name}.&"
+            insert_text = f"{symbol.name}&"
             if insert_text in seen:
                 continue
             seen.add(insert_text)
@@ -2759,7 +2759,7 @@ def value_completions_for_expected_type(
             items.append(argument_completion_item(symbol, expected_type, insert_text, symbol.detail, 0))
             continue
         if expected_canon.startswith("*") and actual_type == expected_canon[1:]:
-            insert_text = f"{symbol.name}.&"
+            insert_text = f"{symbol.name}&"
             if insert_text in seen:
                 continue
             seen.add(insert_text)
@@ -4161,8 +4161,9 @@ def infer_simple_expr_type(workspace: Workspace, doc: Document, expr: str, line:
         comma = expr.find(",")
         if comma > len("cast("):
             return expr[len("cast(") : comma].strip()
-    if expr.endswith(".&"):
-        inner = infer_simple_expr_type(workspace, doc, expr[:-2], line)
+    if expr.endswith("&") and not expr.endswith("&&"):
+        # A trailing `&` is a postfix address-of: `p&`, `nodes[i].next[0]&`.
+        inner = infer_simple_expr_type(workspace, doc, expr[:-1].rstrip(), line)
         return f"*{canonical_type(inner)}" if inner else ""
     literal = simple_literal_type(expr)
     if literal:
