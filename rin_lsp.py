@@ -3068,7 +3068,7 @@ def field_with_owner_type(field: FieldSymbol, owner_type: str) -> FieldSymbol:
 # arm only that kind has -- which is why there is no longer a per-kind table
 # here for completion to pick between.
 REFLECT_FIELDS: tuple[tuple[str, str], ...] = (
-    ("name", "*const c8"),
+    ("name", "[*]const c8"),
     ("size", "u64"),
     ("align", "u64"),
     ("kind", "i32"),
@@ -3082,31 +3082,31 @@ REFLECT_FIELDS: tuple[tuple[str, str], ...] = (
 # each kind gets only its own arm -- which makes the diagnostic hard to reach by
 # accident rather than merely recoverable once hit.
 REFLECT_VARIANT_ARMS: dict[str, tuple[tuple[str, str], ...]] = {
-    "struct": (("fields", "*const reflect_field"),),
-    "union": (("fields", "*const reflect_field"),),
-    "enum": (("values", "*const reflect_value"),),
+    "struct": (("fields", "[*]const reflect_field"),),
+    "union": (("fields", "[*]const reflect_field"),),
+    "enum": (("values", "[*]const reflect_value"),),
 }
 
 REFLECT_FIELD_MEMBERS: tuple[tuple[str, str], ...] = (
-    ("name", "*const c8"),
-    ("type", "*const c8"),
-    ("attrs", "*const c8"),
+    ("name", "[*]const c8"),
+    ("type", "[*]const c8"),
+    ("attrs", "[*]const c8"),
     ("offset", "u64"),
     ("size", "u64"),
     ("align", "u64"),
     ("kind", "i32"),
     ("array_count", "u64"),
     ("pointer_depth", "u64"),
-    ("base_type", "*const c8"),
-    ("elem_type", "*const c8"),
-    ("generic_arg_type", "*const c8"),
+    ("base_type", "[*]const c8"),
+    ("elem_type", "[*]const c8"),
+    ("generic_arg_type", "[*]const c8"),
     ("is_const", "u64"),
     # The nested record for this field's own type, so a walk can recurse.
     ("info", "*const reflect"),
 )
 
 REFLECT_VALUE_MEMBERS: tuple[tuple[str, str], ...] = (
-    ("name", "*const c8"),
+    ("name", "[*]const c8"),
     ("value", "i32"),
 )
 
@@ -3784,7 +3784,13 @@ def proc_return_type(detail: str) -> str:
 def canonical_type(type_name: str) -> str:
     out = re.sub(r"\b(const|let)\b", "", type_name.strip())
     out = re.sub(r"\s+", "", out)
-    return out.rstrip(";")
+    out = out.rstrip(";")
+    # `[]T` is the built-in spelling of `slice<T>`, so its fields are slice's.
+    if out.startswith("[]"):
+        out = f"slice<{canonical_type(out[2:])}>"
+    # `[*]T`, a raw pointer, completes and indexes like `*T`.
+    out = out.replace("[*]", "*")
+    return out
 
 
 def pointer_pointee_type(type_name: str) -> str:
@@ -3811,6 +3817,9 @@ def indexed_element_type(type_name: str, workspace: Workspace | None = None) -> 
             out = rhs
     if out.startswith("*"):
         return out[1:]
+    slice_match = re.fullmatch(r"slice<(.+)>", out)
+    if slice_match:
+        return slice_match.group(1)
     match = re.match(r"^\[[^\]]+\](.+)$", out)
     return match.group(1) if match else ""
 
@@ -3823,10 +3832,13 @@ def simple_literal_type(expr: str) -> str:
         return "*char"
     if re.fullmatch(r"'(?:\\.|[^'\\])'", expr):
         return "char"
+    typed = re.fullmatch(r"(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|[0-9.]+(?:[eE][+-]?[0-9]+)?)'([A-Za-z_]\w*)", expr)
+    if typed:
+        return typed.group(1)
     if re.fullmatch(r"0[xX][0-9A-Fa-f]+|0[bB][01]+|[0-9]+", expr):
         return "i32"
-    if re.fullmatch(r"(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?f?", expr):
-        return "f32"
+    if re.fullmatch(r"(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", expr):
+        return "f64"
     return ""
 
 
