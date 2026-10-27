@@ -119,6 +119,7 @@ KEYWORDS = {
     "if",
     "import",
     "label",
+    "noalias",
     "or",
     "proc",
     "return",
